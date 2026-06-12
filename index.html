@@ -8,7 +8,7 @@
 ══════════════════════════════════════════════════════════════
  SISTEMAS GLOBALES — PANTALLA DEPORTIVA
  Pantalla: 800 × 280 px  |  GitHub Pages ready
- v3.8.0  —  Fixture REAL 72 partidos; horas auto-corregidas por API
+ v3.9.0  —  Flujo de datos \u00fanico (sin carreras); refresh max 3 min
 ══════════════════════════════════════════════════════════════
  Layout:
    CONTENT 220px → [publicidad cliente 590px] | [próximo partido 210px]
@@ -348,10 +348,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000}
 var CFG = {
   /* scores.json generado por GitHub Action en el MISMO repo — sin CORS */
   SCORES_URL:   'scores.json',
-  API_URL:      'https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json',
-  RAPIDAPI_KEY: '',
-  REFRESH:      60000,
-  REFRESH_IDLE: 180000,
+  REFRESH:      60000,   /* 1 min cuando hay partido en vivo */
+  REFRESH_IDLE: 180000,  /* 3 min M\u00c1XIMO siempre */
   RELOAD:       3600000,
   TZ:           'America/Bogota',
   LOCALE:       'es-CO',
@@ -485,7 +483,8 @@ var FIXTURE = [
    Agrega vía SG.score('A','B',1,0) o hardcodeado aquí
    ────────────────────────────────────────────────────────── */
 var KNOWN_SCORES = {
-  /* Ejemplo: 'Mexico vs South Africa': { hs:2, as:0 }, */
+  /* Resultados confirmados manualmente (o via SG.score / scores.json) */
+  'Canada vs Bosnia and Herzegovina': { hs:1, as:1 },
 };
 
 /* Horas oficiales por partido (las llena scores.json autom\u00e1ticamente) */
@@ -787,75 +786,6 @@ function parseLocalFixture() {
   return {results:showResults, next:nextMatch};
 }
 
-/* ── PARSEAR OPENFOOTBALL ────────────────────────────────────*/
-function parseOpenFootball(data) {
-  var all      = [];
-  var now      = Date.now();
-  var todayStr = new Date().toLocaleString('en-CA',{timeZone:CFG.TZ}).substring(0,10);
-  var rounds   = data.rounds || [];
-
-  for (var r = 0; r < rounds.length; r++) {
-    var ms = rounds[r].matches || [];
-    for (var m = 0; m < ms.length; m++) {
-      var g        = ms[m];
-      var rawTime  = (g.time||'12:00').toString().trim();
-      var timeOnly = rawTime.replace(/\s*UTC[+-]\d+/i,'').trim();
-      var offMatch = rawTime.match(/UTC([+-]\d+)/i);
-      var offHrs   = offMatch ? parseInt(offMatch[1]) : 0;
-      var dtStr    = g.date+'T'+(timeOnly.length===5?timeOnly:'12:00')+':00Z';
-      var dt       = new Date(new Date(dtStr).getTime()-offHrs*3600000);
-
-      var t1 = typeof g.team1==='object'?(g.team1.name||g.team1.key||''):(g.team1||'');
-      var t2 = typeof g.team2==='object'?(g.team2.name||g.team2.key||''):(g.team2||'');
-      if (!t1||!t2) continue;
-
-      var known    = KNOWN_SCORES[t1+' vs '+t2]||null;
-      var hasScore = known?true:(g.score1!==null&&g.score1!==undefined);
-      var sc1      = known?known.hs:g.score1;
-      var sc2      = known?known.as:g.score2;
-
-      var diffMs   = now-dt.getTime();
-      var gameDate = dt.toLocaleString('en-CA',{timeZone:CFG.TZ}).substring(0,10);
-      var isToday  = (gameDate===todayStr);
-      var isFuture = dt.getTime()>now;
-      var isLive   = isToday&&diffMs>0&&diffMs<7200000&&!hasScore;
-      var status;
-      if (isLive)        status='LIVE';
-      else if (hasScore) status='FT';
-      else if (isToday)  status='HOY';
-      else if (isFuture) status='SOON';
-      else               status='FT';
-
-      all.push({
-        h:{n:t1,f:getFlag(t1)}, a:{n:t2,f:getFlag(t2)},
-        hs:sc1, as:sc2, st:status,
-        min:(status==='LIVE'?Math.floor(diffMs/60000)+"'":null),
-        dt:dt.toISOString(), ts:dt.getTime(),
-        venue:(g.group?'Grupo '+g.group:'')+(g.ground?' \u00b7 '+g.ground:''),
-        isToday:isToday, isFuture:isFuture,
-      });
-    }
-  }
-
-  all.sort(function(a,b){return a.ts-b.ts;});
-  var live   = all.filter(function(x){return x.st==='LIVE';});
-  var today  = all.filter(function(x){return x.isToday&&x.st!=='LIVE';});
-  var past   = all.filter(function(x){return !x.isFuture&&x.st!=='LIVE'&&!x.isToday;}).reverse();
-  var future = all.filter(function(x){return x.isFuture&&!x.isToday;});
-
-  var showResults = live.concat(today).concat(past).slice(0,10);
-  if (!showResults.length) showResults = future.slice(0,5);
-
-  var cands = all.filter(function(x){return x.st==='SOON'||x.st==='HOY'||x.isFuture;});
-  cands.sort(function(a,b){return a.ts-b.ts;});
-  var nextMatch = null;
-  if (cands.length) nextMatch = {h:cands[0].h,a:cands[0].a,dt:cands[0].dt,venue:cands[0].venue};
-  else if (live.length) nextMatch = {h:live[0].h,a:live[0].a,dt:live[0].dt,venue:live[0].venue};
-
-  return {results:showResults, next:nextMatch};
-}
-
-
 /* ── PARSEAR scores.json (GitHub Action + football-data.org) ─
    Estados de la API: SCHEDULED/TIMED → SOON · IN_PLAY → LIVE
    PAUSED → HT · FINISHED → FT
@@ -863,7 +793,12 @@ function parseOpenFootball(data) {
    ────────────────────────────────────────────────────────── */
 var TEAM_ALIASES = {
   'USA':'United States','Korea Republic':'South Korea',
-  'IR Iran':'Iran','Czechia':'Czech Republic',
+  'IR Iran':'Iran','Czech Republic':'Czechia',
+  'Bosnia-Herzegovina':'Bosnia and Herzegovina',
+  'Bosnia & Herzegovina':'Bosnia and Herzegovina',
+  'T\u00fcrkiye':'Turkey','C\u00f4te d\u2019Ivoire':'Ivory Coast',
+  "C\u00f4te d'Ivoire":'Ivory Coast','Cabo Verde':'Cape Verde',
+  'Congo DR':'DR Congo','Cura\u00e7ao':'Curacao',
 };
 function normTeam(n){ return TEAM_ALIASES[n] || n; }
 
@@ -942,41 +877,20 @@ function fetchData() {
     return;
   }
 
-  /* 1) scores.json del mismo repo (resultados REALES via GitHub Action) */
-  fetchScoresJson(function(gotScores) {
-    var local = parseLocalFixture();
-    applyData(local, gotScores ? 'Resultados en vivo' : 'Fixture local');
-  });
+  /* 1) Pintar INMEDIATO con fixture + resultados ya conocidos */
+  applyData(parseLocalFixture(), 'Fixture');
 
-  var local = parseLocalFixture();
-  applyData(local, 'Fixture local');
-
+  /* 2) Leer scores.json (GitHub Action) y re-pintar con lo nuevo.
+     Es la \u00daNICA fuente remota — sin carreras de datos. */
   setStatus('', '\u25cf Actualizando...');
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', CFG.API_URL, true);
-  xhr.timeout = 8000;
-  xhr.onload = function() {
-    if (xhr.status === 200) {
-      try {
-        var data   = JSON.parse(xhr.responseText);
-        var parsed = parseOpenFootball(data);
-        var apiHasScores = parsed.results.some(function(m){return m.hs!==null;});
-        if (apiHasScores || parsed.results.length > local.results.length) {
-          applyData(parsed, 'API conectada');
-        } else {
-          setStatus('ok', '\u25cf Fixture');
-        }
-      } catch(e) {
-        setStatus('ok', '\u25cf Fixture local');
-      }
+  fetchScoresJson(function(gotScores) {
+    if (gotScores) {
+      applyData(parseLocalFixture(), 'En vivo \u00b7 ' +
+        new Date().toLocaleTimeString(CFG.LOCALE,{hour:'2-digit',minute:'2-digit',timeZone:CFG.TZ}));
     } else {
       setStatus('ok', '\u25cf Fixture local');
     }
-  };
-  xhr.onerror = xhr.ontimeout = function() {
-    setStatus('ok', '\u25cf Sin red \u00b7 Fixture');
-  };
-  xhr.send();
+  });
 }
 
 /* ── ANIMACIÓN GOL ───────────────────────────────────────────*/
@@ -1013,7 +927,7 @@ function init() {
   setInterval(checkGoal, 1000);
   fetchData();
   setTimeout(function(){ location.reload(); }, CFG.RELOAD);
-  console.log('[SG Futbol] v3.8.0 | ' + new Date().toLocaleString(CFG.LOCALE,{timeZone:CFG.TZ}));
+  console.log('[SG Futbol] v3.9.0 | ' + new Date().toLocaleString(CFG.LOCALE,{timeZone:CFG.TZ}));
   console.log('[SG] Layout: sin header | publicidad 640x232 | panel 160px | ticker 48px con reloj');
   console.log('[SG] Comandos: SG.goal("X") | SG.score("A","B",1,0) | SG.scores() | SG.refresh() | SG.demo()');
 }
@@ -1053,9 +967,35 @@ window.SG = {
     console.log('[SG] Actualización forzada');
   },
   score: function(home, away, hs, as_){
-    KNOWN_SCORES[home+' vs '+away]={hs:hs, as:as_};
+    /* matching flexible: encuentra el partido aunque escribas
+       nombres parciales: SG.score('Canada','Bosnia',1,1) */
+    var hL = (home||'').toLowerCase(), aL = (away||'').toLowerCase();
+    var key = null;
+    for (var i = 0; i < FIXTURE.length; i++) {
+      var f = FIXTURE[i];
+      if (f.h.toLowerCase().indexOf(hL) === 0 && f.a.toLowerCase().indexOf(aL) === 0) {
+        key = f.h + ' vs ' + f.a; break;
+      }
+    }
+    if (!key) {
+      /* probar tambi\u00e9n invertido (visitante primero) */
+      for (var j = 0; j < FIXTURE.length; j++) {
+        var g = FIXTURE[j];
+        if (g.a.toLowerCase().indexOf(hL) === 0 && g.h.toLowerCase().indexOf(aL) === 0) {
+          key = g.h + ' vs ' + g.a;
+          var tmp = hs; hs = as_; as_ = tmp;
+          console.log('[SG] Orden invertido detectado — guardado como ' + key);
+          break;
+        }
+      }
+    }
+    if (!key) {
+      key = home + ' vs ' + away;
+      console.warn('[SG] Partido no encontrado en FIXTURE — guardado literal: ' + key);
+    }
+    KNOWN_SCORES[key] = {hs:hs, as:as_};
     fetchData();
-    console.log('[SG] Resultado guardado:', home, hs+'-'+as_, away);
+    console.log('[SG] Resultado guardado:', key, '\u2192', hs+'-'+as_);
   },
   scores: function(){
     console.table(KNOWN_SCORES);
