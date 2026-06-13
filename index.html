@@ -8,7 +8,7 @@
 ══════════════════════════════════════════════════════════════
  SISTEMAS GLOBALES — ESCENA MARCADORES FULLSCREEN
  800 × 280 px | Duración sugerida en playlist: 10 segundos
- v1.2.0 — Mitad izq: partido en curso/próximo · Mitad der: resultados
+ v1.3.0 — Mitad izq: partido en curso/próximo · Mitad der: resultados
  Usa el MISMO scores.json del GitHub Action que el index.html
 ══════════════════════════════════════════════════════════════
  Playlist VNNOX sugerida:
@@ -493,6 +493,7 @@ function updateTicker(matches) {
       else if (m.st === 'FT')   { badge = m.day ? ' \u2714 FINAL \u00b7 ' + m.day : ' \u2714 FINAL'; }
       else if (m.st === 'HOY')  { badge = ' \u23F0 HOY'; }
       else if (m.st === 'SOON') { badge = ' \u23F0 PR\u00d3XIMO'; }
+      else if (m.st === 'PEND') { continue; } /* sin resultado conocido — no mostrar */
       parts.push(m.h.f + ' ' + shortName(m.h.n) + ' ' + hs + '\u2013' + as + ' ' + shortName(m.a.n) + ' ' + m.a.f + badge);
     }
   }
@@ -597,7 +598,7 @@ function parseLocalFixture() {
       else if (hasScore) status = 'FT';
       else if (isToday)  status = 'HOY';
       else if (isFuture) status = 'SOON';
-      else               status = 'FT';
+      else               status = 'PEND'; /* jugado pero sin resultado: NO mostrar como Final */
     }
 
     all.push({
@@ -874,6 +875,7 @@ function renderResultsScene(results) {
   for (var i = 0; i < results.length && rows.length < 4; i++) {
     var m = results[i];
     if (m.st === 'LIVE' || m.st === 'HT') continue; /* ya está a la izquierda */
+    if (m.st === 'PEND') continue; /* sin marcador disponible aún — esperando API */
     rows.push(m);
   }
   if (!rows.length) {
@@ -901,7 +903,13 @@ function renderResultsScene(results) {
 function applyData(parsed, source) {
   renderFeatured(parsed.results, parsed.next);
   renderResultsScene(parsed.results);
-  setStatus('ok', '\u25cf ' + source);
+  /* status m\u00e1s honesto: si no hay marcadores reales, avisar */
+  var hasAnyScore = parsed.results.some(function(m){return m.hs!=null;});
+  if (!_apiOk && !hasAnyScore) {
+    setStatus('err', '\u25cf Esperando API \u00b7 sin resultados');
+  } else {
+    setStatus('ok', '\u25cf ' + source);
+  }
   var hasLive = parsed.results.some(function(m){return m.st==='LIVE'||m.st==='HT';});
   scheduleRefresh(hasLive ? CFG.REFRESH : CFG.REFRESH_IDLE);
 }
@@ -914,7 +922,7 @@ function init() {
   setInterval(updateCountdown, 1000);
   fetchData();
   setTimeout(function(){ location.reload(); }, CFG.RELOAD);
-  console.log('[SG Escena] v1.2.0 | misma fuente de datos que index.html');
+  console.log('[SG Escena] v1.3.0 | misma fuente de datos que index.html');
 }
 document.addEventListener('DOMContentLoaded', init);
 
